@@ -21,6 +21,11 @@ export const appRoutes: AppRoute[] = [
     link: "/retrieve",
   },
   {
+    name: "Saved",
+    icon: "Flask",
+    link: "/chat/saved",
+  },
+  {
     name: "Test MCP API",
     icon: "Flask",
     link: "/test-mcp-api",
