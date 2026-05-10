@@ -1,14 +1,33 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Check } from "lucide-react";
-import { extractStateFromInput, incrementStateProgress } from "@/lib/state-progress";
+import { incrementStateProgress } from "@/lib/state-progress";
 
-const INPUT_PLACEHOLDER = "VA, Norfolk, foundation vent";
-const INPUT_HELP = "Format: state_abbr, municipality_name, query (comma-separated)";
+const INPUT_HELP = "Select state and municipality, then enter your query.";
+
+type StateOption = {
+  abbr: string;
+  name: string;
+};
+
+type MunicipalityOption = {
+  id: number | null;
+  name: string;
+};
+
+function buildCombinedInput(stateAbbr: string, municipalityName: string, query: string): string {
+  return `${stateAbbr}, ${municipalityName}, ${query}`;
+}
 
 export default function RetrievePage() {
-  const [input, setInput] = useState(INPUT_PLACEHOLDER);
+  const [states, setStates] = useState<StateOption[]>([]);
+  const [municipalities, setMunicipalities] = useState<MunicipalityOption[]>([]);
+  const [stateAbbr, setStateAbbr] = useState("");
+  const [municipalityName, setMunicipalityName] = useState("");
+  const [query, setQuery] = useState("");
+  const [optionsLoading, setOptionsLoading] = useState(false);
+  const [municipalitiesLoading, setMunicipalitiesLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<unknown | null>(null);
@@ -43,12 +62,12 @@ export default function RetrievePage() {
     });
   }, [error, result]);
 
-  const canRunRetrieve = !hasRetrieved && !loading && !storeLoading;
+  const hasRetrieveInput = stateAbbr.trim() !== "" && municipalityName.trim() !== "" && query.trim() !== "";
+  const canRunRetrieve = hasRetrieveInput && !hasRetrieved && !loading && !storeLoading;
   const canRunStore = hasRetrieved && !hasStoredOnce && canStore && !loading && !storeLoading;
   const canRunStoreAgain = hasStoredOnce && canStore && storeHasMore && !loading && !storeLoading;
 
-  function resetFlow(nextInput: string) {
-    setInput(nextInput);
+  function resetFlow() {
     setError("");
     setResult(null);
     setHasRetrieved(false);
@@ -59,10 +78,81 @@ export default function RetrievePage() {
     setStoreHasMore(false);
   }
 
+  useEffect(() => {
+    async function loadStates() {
+      setOptionsLoading(true);
+      try {
+        const response = await fetch("/api/retrieve");
+        const data = (await response.json()) as { states?: unknown; error?: unknown };
+        if (!response.ok) {
+          throw new Error(typeof data.error === "string" ? data.error : "Failed to load states.");
+        }
+        const nextStates = Array.isArray(data.states)
+          ? data.states
+              .map((item) => (item && typeof item === "object" ? (item as Record<string, unknown>) : null))
+              .filter((item): item is Record<string, unknown> => item !== null)
+              .map((item) => ({
+                abbr: typeof item.abbr === "string" ? item.abbr : "",
+                name: typeof item.name === "string" ? item.name : "",
+              }))
+              .filter((item) => item.abbr !== "" && item.name !== "")
+          : [];
+        setStates(nextStates);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setOptionsLoading(false);
+      }
+    }
+
+    loadStates();
+  }, []);
+
+  useEffect(() => {
+    if (!stateAbbr) {
+      setMunicipalities([]);
+      setMunicipalityName("");
+      setMunicipalitiesLoading(false);
+      return;
+    }
+
+    async function loadMunicipalities() {
+      setOptionsLoading(true);
+      setMunicipalitiesLoading(true);
+      try {
+        const response = await fetch(`/api/retrieve?stateAbbr=${encodeURIComponent(stateAbbr)}`);
+        const data = (await response.json()) as { municipalities?: unknown; error?: unknown };
+        if (!response.ok) {
+          throw new Error(typeof data.error === "string" ? data.error : "Failed to load municipalities.");
+        }
+        const nextMunicipalities = Array.isArray(data.municipalities)
+          ? data.municipalities
+              .map((item) => (item && typeof item === "object" ? (item as Record<string, unknown>) : null))
+              .filter((item): item is Record<string, unknown> => item !== null)
+              .map((item) => ({
+                id: typeof item.id === "number" ? item.id : null,
+                name: typeof item.name === "string" ? item.name : "",
+              }))
+              .filter((item) => item.name !== "")
+          : [];
+        setMunicipalities(nextMunicipalities);
+        setMunicipalityName("");
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setOptionsLoading(false);
+        setMunicipalitiesLoading(false);
+      }
+    }
+
+    loadMunicipalities();
+  }, [stateAbbr]);
+
   async function handleRetrieve() {
     if (!canRunRetrieve) {
       return;
     }
+    const combinedInput = buildCombinedInput(stateAbbr, municipalityName, query);
 
     setLoading(true);
     setError("");
@@ -78,7 +168,7 @@ export default function RetrievePage() {
       const response = await fetch("/api/retrieve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ input }),
+        body: JSON.stringify({ input: combinedInput }),
       });
 
       const data: unknown = await response.json();
@@ -93,10 +183,7 @@ export default function RetrievePage() {
 
       setResult(data);
       setHasRetrieved(true);
-      const stateAbbr = extractStateFromInput(input);
-      if (stateAbbr) {
-        incrementStateProgress(stateAbbr, 1);
-      }
+      incrementStateProgress(stateAbbr, 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -117,7 +204,11 @@ export default function RetrievePage() {
       const response = await fetch("/api/store", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ input, result, startIndex }),
+        body: JSON.stringify({
+          input: buildCombinedInput(stateAbbr, municipalityName, query),
+          result,
+          startIndex,
+        }),
       });
 
       const data = (await response.json()) as {
@@ -170,14 +261,84 @@ export default function RetrievePage() {
         <p className="mb-4 text-sm text-zinc-600 dark:text-zinc-400">{INPUT_HELP}</p>
 
         <div className="flex flex-col gap-3">
-          <input
-            type="text"
-            value={input}
-            onChange={(event) => resetFlow(event.target.value)}
-            placeholder={INPUT_PLACEHOLDER}
-            className="w-full rounded border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
-          />
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">Changing input resets steps 1-3.</p>
+          <div className="flex w-full items-start gap-3">
+            <div className="basis-1/5">
+              <label className="mb-1 block text-sm font-medium text-zinc-800 dark:text-zinc-200" htmlFor="state-select">
+                State
+              </label>
+              <select
+                id="state-select"
+                value={stateAbbr}
+                onChange={(event) => {
+                  setStateAbbr(event.target.value);
+                  resetFlow();
+                }}
+                className="w-full rounded border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+              >
+                <option value="">Select a state</option>
+                {states.map((state) => (
+                  <option key={state.abbr} value={state.abbr}>
+                    {state.name} ({state.abbr})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="basis-1/5">
+              <label
+                className="mb-1 block text-sm font-medium text-zinc-800 dark:text-zinc-200"
+                htmlFor="municipality-select"
+              >
+                Municipality
+              </label>
+              <select
+                id="municipality-select"
+                value={municipalityName}
+                disabled={!stateAbbr || optionsLoading}
+                onChange={(event) => {
+                  setMunicipalityName(event.target.value);
+                  resetFlow();
+                }}
+                className="w-full rounded border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+              >
+                <option value="">
+                  {!stateAbbr
+                    ? "Select a state first"
+                    : municipalitiesLoading
+                      ? "Loading municipalities..."
+                      : "Select a municipality"}
+                </option>
+                {!municipalitiesLoading && municipalities.map((municipality) => (
+                  <option key={`${municipality.id ?? "unknown"}-${municipality.name}`} value={municipality.name}>
+                    {municipality.name}
+                  </option>
+                ))}
+              </select>
+              {stateAbbr && municipalitiesLoading ? (
+                <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Fetching municipalities...</p>
+              ) : null}
+            </div>
+
+            <div className="basis-3/5">
+              <label className="mb-1 block text-sm font-medium text-zinc-800 dark:text-zinc-200" htmlFor="query-input">
+                Query
+              </label>
+              <input
+                id="query-input"
+                type="text"
+                value={query}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  resetFlow();
+                }}
+                placeholder="e.g. foundation vent"
+                className="w-full rounded border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+              />
+            </div>
+          </div>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+            Changing state, municipality, or query resets steps 1-3.
+          </p>
 
           <div className="mt-1 flex flex-col gap-3">
             <div className="flex items-center gap-3">
@@ -258,7 +419,7 @@ export default function RetrievePage() {
             </pre>
           ) : (
             <p className="text-sm text-zinc-600 dark:text-zinc-400">
-              Enter comma-separated input, then press Retrieve to show the response here.
+              Select state and municipality, enter query, then press Retrieve to show the response here.
             </p>
           )}
         </div>

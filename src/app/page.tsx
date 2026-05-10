@@ -80,11 +80,13 @@ function getStateTileColor(progress: number): string {
 
 export default function HomePage() {
   const router = useRouter();
-  const [progressByState, setProgressByState] = useState<StateProgressMap>(() => readStateProgressFromStorage());
+  const [progressByState, setProgressByState] = useState<StateProgressMap>({});
   const [hoveredState, setHoveredState] = useState<string | null>(null);
   const [cursorPosition, setCursorPosition] = useState({ x: 0, y: 0 });
 
   useEffect(() => {
+    setProgressByState(readStateProgressFromStorage());
+
     const handleStorage = (event: StorageEvent) => {
       if (event.key && event.key !== STATE_PROGRESS_STORAGE_KEY) {
         return;

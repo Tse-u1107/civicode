@@ -98,6 +98,14 @@ export default function ChatPage() {
 
       const data = (await response.json()) as { reply?: unknown; sources?: unknown };
       const reply = typeof data.reply === "string" && data.reply.trim() ? data.reply.trim() : "No response.";
+      const retrieveHref =
+        data && typeof data === "object" && typeof (data as { retrieveHref?: unknown }).retrieveHref === "string"
+          ? (data as { retrieveHref: string }).retrieveHref
+          : undefined;
+      const retrieveLabel =
+        data && typeof data === "object" && typeof (data as { retrieveLabel?: unknown }).retrieveLabel === "string"
+          ? (data as { retrieveLabel: string }).retrieveLabel
+          : undefined;
       const sources =
         data && typeof data === "object" && Array.isArray((data as { sources?: unknown }).sources)
           ? ((data as { sources: unknown[] }).sources.filter(
@@ -118,7 +126,7 @@ export default function ChatPage() {
 
       setMessages((prev) => [
         ...prev,
-        { id: Date.now() + 1, role: "agent", text: reply, sources, feedbackEnabled: true },
+        { id: Date.now() + 1, role: "agent", text: reply, sources, retrieveHref, retrieveLabel, feedbackEnabled: true },
       ]);
     } catch (error) {
       setMessages((prev) => [

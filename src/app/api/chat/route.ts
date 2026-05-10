@@ -1,10 +1,15 @@
-import { getOrCreateChromaCollection } from "@/lib/chroma";
-import { embedTextChunksWithGemini } from "@/lib/gemini";
+import {
+  getCollectionNameForState,
+  getExistingChromaCollection,
+  getOrCreateChromaCollection,
+} from "@/lib/chroma";
+import { embedTextChunksWithGemini, generateGroundedReply } from "@/lib/gemini";
 
 type ParsedScopedInput = {
-  municipality_name: string;
-  state_abbr: string;
-  query: string;
+  municipality: string;
+  municipality_normalized: string;
+  state: string;
+  about: string;
 };
 
 const US_STATE_ABBR: Record<string, string> = {
@@ -72,34 +77,180 @@ function normalizeStateToAbbr(rawState: string): string | null {
   }
 
   const mapped = US_STATE_ABBR[cleaned.toLowerCase()];
-  return mapped ?? null;
+  if (mapped) {
+    return mapped;
+  }
+
+  const normalizedSegment = cleaned
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const withoutLeadingLabel = normalizedSegment.replace(
+    /^(?:the\s+)?(?:state|city|county|land|area|policy|code)\s+of\s+/,
+    "",
+  );
+
+  const candidates = [normalizedSegment, withoutLeadingLabel];
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+
+    const exact = US_STATE_ABBR[candidate];
+    if (exact) {
+      return exact;
+    }
+
+    for (const [stateName, stateAbbr] of Object.entries(US_STATE_ABBR)) {
+      if (
+        candidate === stateName
+        || candidate.startsWith(`${stateName} `)
+        || candidate.endsWith(` ${stateName}`)
+        || candidate.includes(` ${stateName} `)
+      ) {
+        return stateAbbr;
+      }
+    }
+  }
+
+  return null;
 }
 
 function parseScopedInput(message: string): ParsedScopedInput | null {
-  const segments = message
+  const trimmedMessage = message.trim();
+  const segments = trimmedMessage
     .split(",")
     .map((item) => item.trim())
     .filter((item) => item.length > 0);
 
-  if (segments.length !== 3) {
+  if (segments.length === 3) {
+    const [municipality, state, query] = segments;
+    if (!municipality || !state || !query) {
+      return null;
+    }
+
+    const state_abbr = normalizeStateToAbbr(state);
+    if (!state_abbr) {
+      return null;
+    }
+
+    return {
+      municipality,
+      municipality_normalized: normalizeMunicipalityName(municipality),
+      state: state_abbr,
+      about: query,
+    };
+  }
+
+  // Fallback: parse natural phrasing like:
+  // - "in arkansas, arkadelphia"
+  // - "of arkansas, bentonville"
+  // - "for norfolk, virginia"
+  const locationMatch = trimmedMessage.match(/\b(?:in|of|for)\s+([^?.!]+?)(?:[?.!]|$)/i);
+  if (!locationMatch?.[1]) {
     return null;
   }
 
-  const [municipality, state, query] = segments;
-  if (!municipality || !state || !query) {
+  const locationParts = locationMatch[1]
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+
+  if (locationParts.length < 2) {
     return null;
   }
 
-  const state_abbr = normalizeStateToAbbr(state);
-  if (!state_abbr) {
+  const first = locationParts[0] ?? "";
+  const second = locationParts[1] ?? "";
+  const firstState = normalizeStateToAbbr(first);
+  const secondState = normalizeStateToAbbr(second);
+
+  if (firstState && !secondState) {
+    return {
+      municipality: second,
+      municipality_normalized: normalizeMunicipalityName(second),
+      state: firstState,
+      about: trimmedMessage,
+    };
+  }
+
+  if (secondState && !firstState) {
+    return {
+      municipality: first,
+      municipality_normalized: normalizeMunicipalityName(first),
+      state: secondState,
+      about: trimmedMessage,
+    };
+  }
+
+  return null;
+}
+
+type HistoryTurn = {
+  role?: unknown;
+  text?: unknown;
+};
+
+function parseMunicipalityOnlyFollowup(message: string): string | null {
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const whatAboutMatch = trimmed.match(/^(?:what\s+about|how\s+about)\s+([^?.!]+)[?.!]*$/i);
+  if (whatAboutMatch?.[1]) {
+    return whatAboutMatch[1].trim();
+  }
+
+  return null;
+}
+
+function extractLastScopedState(history: HistoryTurn[]): string | null {
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const turn = history[index];
+    if (turn?.role !== "user" || typeof turn.text !== "string") {
+      continue;
+    }
+    const parsed = parseScopedInput(turn.text);
+    if (parsed?.state) {
+      return parsed.state;
+    }
+  }
+  return null;
+}
+
+function extractExplicitScope(message: string, history: HistoryTurn[]): ParsedScopedInput | null {
+  const parsedDirect = parseScopedInput(message);
+  if (parsedDirect) {
+    return parsedDirect;
+  }
+
+  const municipalityOnly = parseMunicipalityOnlyFollowup(message);
+  if (!municipalityOnly) {
+    return null;
+  }
+
+  const inferredState = extractLastScopedState(history);
+  if (!inferredState) {
     return null;
   }
 
   return {
-    municipality_name: municipality,
-    state_abbr,
-    query,
+    state: inferredState,
+    municipality: municipalityOnly,
+    municipality_normalized: normalizeMunicipalityName(municipalityOnly),
+    about: message.trim(),
   };
+}
+
+function normalizeMunicipalityName(rawMunicipality: string): string {
+  return rawMunicipality
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ");
 }
 
 function isBasicGreeting(message: string): boolean {
@@ -113,6 +264,30 @@ function summarizeDocument(text: string): string {
     return compact;
   }
   return `${compact.slice(0, 220).trimEnd()}...`;
+}
+
+function toTitleCase(value: string): string {
+  return value
+    .trim()
+    .split(/\s+/)
+    .map((part) => (part ? `${part[0].toUpperCase()}${part.slice(1).toLowerCase()}` : part))
+    .join(" ");
+}
+
+function buildLocationLabel(scopedInput: ParsedScopedInput | null): string {
+  if (!scopedInput) {
+    return "";
+  }
+  return `${toTitleCase(scopedInput.municipality)}, ${scopedInput.state}`;
+}
+
+function formatNeighborLine(neighbor: { title: string; summary: string }): string {
+  const title = neighbor.title.trim();
+  const summary = neighbor.summary.trim();
+  if (!summary || summary === title) {
+    return `- ${title}`;
+  }
+  return `- ${title}: ${summary}`;
 }
 
 function buildSourceTitle(metadata: Record<string, unknown>, fallbackIndex: number): string {
@@ -162,18 +337,39 @@ function toNearestNeighbors(queryResult: unknown) {
         title: buildSourceTitle(metadata, index),
         summary: summarizeDocument(document),
         distance,
+        municipalityName:
+          typeof metadata.municipalityName === "string" ? metadata.municipalityName : "",
+        municipalityNameNormalized:
+          typeof metadata.municipalityNameNormalized === "string" ? metadata.municipalityNameNormalized : "",
       };
     })
     .filter((item) => item.summary.length > 0);
 }
 
-const MAX_NEIGHBORS = 3;
+function municipalityMatchesScope(
+  neighbor: { municipalityName: string; municipalityNameNormalized: string },
+  scopedInput: ParsedScopedInput,
+): boolean {
+  const candidate = neighbor.municipalityNameNormalized || normalizeMunicipalityName(neighbor.municipalityName);
+  if (candidate === scopedInput.municipality_normalized) {
+    return true;
+  }
+
+  // Backward-compatibility for legacy metadata values like
+  // "city of arkadelphia" or "arkadelphia city".
+  return candidate.includes(scopedInput.municipality_normalized)
+    || scopedInput.municipality_normalized.includes(candidate);
+}
+
+const MAX_NEIGHBORS = 6;
+const MAX_SCOPED_CANDIDATES = 24;
 const STRONG_MATCH_DISTANCE = 0.9;
 
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as { message?: unknown };
+    const body = (await req.json()) as { message?: unknown; history?: unknown };
     const message = typeof body.message === "string" ? body.message.trim() : "";
+    const history = Array.isArray(body.history) ? (body.history as HistoryTurn[]) : [];
 
     if (!message) {
       return Response.json({ error: "message is required" }, { status: 400 });
@@ -188,51 +384,121 @@ export async function POST(req: Request) {
       });
     }
 
-    const scopedInput = parseScopedInput(message);
-    const queryText = scopedInput?.query ?? message;
+    const scopedInput = extractExplicitScope(message, history);
+    const queryText = scopedInput?.about ?? message;
     const vectors = await embedTextChunksWithGemini([queryText]);
     const queryEmbedding = vectors[0];
     if (!queryEmbedding || queryEmbedding.length === 0) {
       throw new Error("Could not create embedding for query.");
     }
 
-    const where = scopedInput
-      ? {
-          $and: [
-            { municipalityName: { $eq: scopedInput.municipality_name } },
-            { stateAbbr: { $eq: scopedInput.state_abbr } },
-          ],
-        }
-      : undefined;
+    const collection = scopedInput
+      ? await getExistingChromaCollection(getCollectionNameForState(scopedInput.state))
+      : await getOrCreateChromaCollection();
 
-    const collection = await getOrCreateChromaCollection();
-    const queryResult = await collection.query({
+    if (scopedInput && !collection) {
+      const location = buildLocationLabel(scopedInput);
+      return Response.json({
+        reply: `I do not have stored code data for ${location} yet. Please fetch it from the Retrieve page first.`,
+        retrieveHref: "/retrieve",
+        retrieveLabel: "Retrieve",
+        sources: [],
+      });
+    }
+
+    const queryCollection = collection as {
+      query: (args: {
+        queryEmbeddings: number[][];
+        nResults: number;
+        include: Array<"documents" | "metadatas" | "distances">;
+        where?: Record<string, string>;
+      }) => Promise<unknown>;
+    };
+
+    const queryResult = await queryCollection.query({
       queryEmbeddings: [queryEmbedding],
-      nResults: MAX_NEIGHBORS,
-      where,
+      nResults: scopedInput ? MAX_SCOPED_CANDIDATES : MAX_NEIGHBORS,
       include: ["documents", "metadatas", "distances"],
+      where: scopedInput
+        ? { municipalityNameNormalized: scopedInput.municipality_normalized }
+        : undefined,
     });
 
-    const neighbors = toNearestNeighbors(queryResult).slice(0, MAX_NEIGHBORS);
+    let rawNeighbors = toNearestNeighbors(queryResult);
+
+    // Compatibility fallback: older rows may miss municipalityNameNormalized.
+    if (scopedInput && rawNeighbors.length === 0) {
+      const fallbackResult = await queryCollection.query({
+        queryEmbeddings: [queryEmbedding],
+        nResults: MAX_SCOPED_CANDIDATES,
+        include: ["documents", "metadatas", "distances"],
+      });
+      rawNeighbors = toNearestNeighbors(fallbackResult);
+    }
+
+    const neighbors = scopedInput
+      ? rawNeighbors
+          .filter((neighbor) => municipalityMatchesScope(neighbor, scopedInput))
+          .slice(0, MAX_NEIGHBORS)
+      : rawNeighbors.slice(0, MAX_NEIGHBORS);
+
+    if (scopedInput && neighbors.length === 0) {
+      const location = buildLocationLabel(scopedInput);
+      return Response.json({
+        reply: `I could not find stored code entries for ${location} yet. Please fetch it from the Retrieve page first.`,
+        retrieveHref: "/retrieve",
+        retrieveLabel: "Retrieve",
+        sources: [],
+        parsedScope: {
+          state: scopedInput.state,
+          municipality: scopedInput.municipality,
+          about: scopedInput.about,
+        },
+      });
+    }
+
     const strongMatchExists = neighbors.some(
       (neighbor) => typeof neighbor.distance === "number" && neighbor.distance <= STRONG_MATCH_DISTANCE,
     );
 
-    if (neighbors.length === 0 || !strongMatchExists) {
-      const fallbackLines = neighbors.length
-        ? neighbors.map((neighbor, index) => `${index + 1}. ${neighbor.title}: ${neighbor.summary}`)
-        : ["1. No neighbors found in the current vector store."];
+    const location = buildLocationLabel(scopedInput);
+    const fallbackLines = neighbors.length
+      ? neighbors.map((neighbor) => formatNeighborLine(neighbor))
+      : ["- No nearby entries found in the current vector store."];
+    const fallbackReply = neighbors.length === 0 || !strongMatchExists
+      ? (location
+          ? `I could not find a strong match for ${location}, but these are the closest stored sections:\n${fallbackLines.join("\n")}`
+          : `I could not find a strong match, but these are the closest stored sections:\n${fallbackLines.join("\n")}`)
+      : (location
+          ? `For ${location}, these are the most relevant code sections I found:\n${fallbackLines.join("\n")}`
+          : `These are the most relevant code sections I found:\n${fallbackLines.join("\n")}`);
 
-      return Response.json({
-        reply: `I don't know, but here's what I have:\n${fallbackLines.join("\n")}`,
-        sources: neighbors,
+    let reply = fallbackReply;
+    try {
+      reply = await generateGroundedReply({
+        question: queryText,
+        locationLabel: location,
+        strongMatch: strongMatchExists,
+        sources: neighbors.map((neighbor) => ({
+          title: neighbor.title,
+          summary: neighbor.summary,
+          distance: neighbor.distance,
+        })),
       });
+    } catch {
+      // Keep existing deterministic fallback output if model generation fails.
     }
 
-    const groundedLines = neighbors.map((neighbor, index) => `${index + 1}. ${neighbor.title}: ${neighbor.summary}`);
     return Response.json({
-      reply: `Based on the nearest code entries:\n${groundedLines.join("\n")}`,
+      reply,
       sources: neighbors,
+      parsedScope: scopedInput
+        ? {
+            state: scopedInput.state,
+            municipality: scopedInput.municipality,
+            about: scopedInput.about,
+          }
+        : null,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

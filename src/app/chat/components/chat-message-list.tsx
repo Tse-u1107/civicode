@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ThumbsDown, ThumbsUp } from "lucide-react";
+import Link from "next/link";
 import { ChatMessage } from "./types";
 
 type ChatMessageListProps = {
@@ -35,6 +36,16 @@ export function ChatMessageList({ messages, isTyping }: ChatMessageListProps) {
             }`}
           >
             <p>{message.text}</p>
+            {message.role === "agent" && message.retrieveHref ? (
+              <div className="mt-2">
+                <Link
+                  href={message.retrieveHref}
+                  className="inline-flex rounded border border-zinc-400/60 px-2 py-1 text-xs font-medium transition hover:bg-zinc-300/60 dark:border-zinc-600 dark:hover:bg-zinc-700/60"
+                >
+                  {message.retrieveLabel ?? "Retrieve"}
+                </Link>
+              </div>
+            ) : null}
             {message.role === "agent" && message.sources && message.sources.length > 0 ? (
               <div className="mt-2 border-t border-zinc-400/40 pt-2 text-xs">
                 <p className="mb-1 font-semibold">Sources</p>

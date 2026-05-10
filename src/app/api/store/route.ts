@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { getOrCreateChromaCollection } from "@/lib/chroma";
+import { getCollectionNameForState, getOrCreateChromaCollection } from "@/lib/chroma";
 import { embedTextChunksWithGemini } from "@/lib/gemini";
 
 const INPUT_FORMAT_HELP =
@@ -203,16 +203,23 @@ export async function POST(request: Request) {
     const ids = limitedEntries.map((entry) => entry.id as string);
     const metadatas = limitedEntries.map((entry) => {
       const metadata = entry.metadata as Record<string, unknown>;
+      const normalizedMunicipality = parsedInput.municipalityName
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
       return {
         ...metadata,
         stateAbbr: parsedInput.stateAbbr,
         municipalityName: parsedInput.municipalityName,
+        municipalityNameNormalized: normalizedMunicipality,
         originalQuery: parsedInput.query,
         filename: `${parsedInput.stateAbbr}_${parsedInput.municipalityName}_${String(metadata.nodeId || "unknown")}.txt`,
       };
     });
 
-    const collection = await getOrCreateChromaCollection();
+    const collectionName = getCollectionNameForState(parsedInput.stateAbbr);
+    const collection = await getOrCreateChromaCollection(collectionName);
     await collection.upsert({
       ids,
       documents,

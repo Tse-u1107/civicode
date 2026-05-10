@@ -22,6 +22,12 @@ export type PlannedToolCall = {
   args: Record<string, unknown>;
 };
 
+export type GroundedSource = {
+  title: string;
+  summary: string;
+  distance: number | null;
+};
+
 type GeminiToolResult = {
   reply: string;
   sources: ToolSource[];
@@ -220,4 +226,62 @@ export async function generateGeminiReplyWithTools(message: string, history: Cha
     sources: [],
     toolCall: null,
   };
+}
+
+export async function generateGroundedReply(params: {
+  question: string;
+  locationLabel: string;
+  strongMatch: boolean;
+  sources: GroundedSource[];
+}): Promise<string> {
+  const ai = new GoogleGenAI({ apiKey: getGeminiApiKey() });
+  const sourcesText = params.sources
+    .slice(0, 6)
+    .map((source, index) => {
+      const distanceLabel = typeof source.distance === "number" ? source.distance.toFixed(4) : "n/a";
+      return [
+        `[${index + 1}] ${source.title}`,
+        `Distance: ${distanceLabel}`,
+        `Excerpt: ${source.summary}`,
+      ].join("\n");
+    })
+    .join("\n\n");
+
+  const confidenceInstruction = params.strongMatch
+    ? "You have relevant matches. Answer directly and concisely from the provided excerpts."
+    : "Matches are weak. Be explicit that confidence is low and ask the user to verify with full ordinance text.";
+
+  const locationLine = params.locationLabel ? `Location scope: ${params.locationLabel}` : "Location scope: not specified";
+  const response = await ai.models.generateContent({
+    model: GEMINI_MODEL,
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            text:
+              "Question:\n"
+              + `${params.question}\n\n`
+              + `${locationLine}\n\n`
+              + "Retrieved municipal code excerpts:\n"
+              + `${sourcesText}\n\n`
+              + "Write a short answer (2-5 sentences). Include section titles inline when useful. "
+              + "If excerpts are insufficient, say exactly what is missing. Do not invent rules.",
+          },
+        ],
+      },
+    ],
+    config: {
+      systemInstruction:
+        "You are a municipal code assistant. Use only the provided excerpts as evidence. "
+        + confidenceInstruction,
+    },
+  });
+
+  const reply = (response.text ?? "").trim();
+  if (!reply) {
+    throw new Error("Empty grounded reply from Gemini.");
+  }
+
+  return reply;
 }

@@ -2,6 +2,8 @@ export type ChatMessage = {
   id: number;
   role: "user" | "agent";
   text: string;
+  retrieveHref?: string;
+  retrieveLabel?: string;
   feedbackEnabled?: boolean;
   sources?: Array<{
     id: string;
