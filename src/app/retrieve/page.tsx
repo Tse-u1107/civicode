@@ -2,6 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Check } from "lucide-react";
+import {
+  buildApiSettingsHeaders,
+  getMissingRequiredApiSettings,
+  readClientApiSettings,
+} from "@/lib/client-api-settings";
+import { MissingKeysModal } from "@/app/components/missing-keys-modal";
 import { incrementStateProgress } from "@/lib/state-progress";
 
 const INPUT_HELP = "Select state and municipality, then enter your query.";
@@ -38,6 +44,9 @@ export default function RetrievePage() {
   const [storeMessage, setStoreMessage] = useState("");
   const [storeNextStartIndex, setStoreNextStartIndex] = useState(0);
   const [storeHasMore, setStoreHasMore] = useState(false);
+  const [isMissingKeysModalOpen, setIsMissingKeysModalOpen] = useState(false);
+  const [missingFields, setMissingFields] = useState<string[]>([]);
+  const [missingActionLabel, setMissingActionLabel] = useState("retrieve");
 
   const formattedResult = useMemo(() => {
     if (!result) {
@@ -152,6 +161,14 @@ export default function RetrievePage() {
     if (!canRunRetrieve) {
       return;
     }
+    const apiSettings = readClientApiSettings();
+    const missing = getMissingRequiredApiSettings(apiSettings);
+    if (missing.length > 0) {
+      setMissingFields(missing);
+      setMissingActionLabel("retrieve");
+      setIsMissingKeysModalOpen(true);
+      return;
+    }
     const combinedInput = buildCombinedInput(stateAbbr, municipalityName, query);
 
     setLoading(true);
@@ -195,6 +212,14 @@ export default function RetrievePage() {
     if (!canStore || !result) {
       return;
     }
+    const apiSettings = readClientApiSettings();
+    const missing = getMissingRequiredApiSettings(apiSettings);
+    if (missing.length > 0) {
+      setMissingFields(missing);
+      setMissingActionLabel("store results");
+      setIsMissingKeysModalOpen(true);
+      return;
+    }
 
     setStoreLoading(true);
     setStoreError("");
@@ -203,7 +228,10 @@ export default function RetrievePage() {
     try {
       const response = await fetch("/api/store", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...buildApiSettingsHeaders(apiSettings),
+        },
         body: JSON.stringify({
           input: buildCombinedInput(stateAbbr, municipalityName, query),
           result,
@@ -424,6 +452,12 @@ export default function RetrievePage() {
           )}
         </div>
       </main>
+      <MissingKeysModal
+        isOpen={isMissingKeysModalOpen}
+        actionLabel={missingActionLabel}
+        missingFields={missingFields}
+        onClose={() => setIsMissingKeysModalOpen(false)}
+      />
     </div>
   );
 }

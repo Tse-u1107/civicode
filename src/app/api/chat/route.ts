@@ -4,6 +4,7 @@ import {
   getOrCreateChromaCollection,
 } from "@/lib/chroma";
 import { embedTextChunksWithGemini, generateGroundedReply } from "@/lib/gemini";
+import { readRuntimeApiSettings } from "@/lib/runtime-api-settings";
 
 type ParsedScopedInput = {
   municipality: string;
@@ -367,6 +368,7 @@ const STRONG_MATCH_DISTANCE = 0.9;
 
 export async function POST(req: Request) {
   try {
+    const runtimeApiSettings = readRuntimeApiSettings(req.headers);
     const body = (await req.json()) as { message?: unknown; history?: unknown };
     const message = typeof body.message === "string" ? body.message.trim() : "";
     const history = Array.isArray(body.history) ? (body.history as HistoryTurn[]) : [];
@@ -386,15 +388,25 @@ export async function POST(req: Request) {
 
     const scopedInput = extractExplicitScope(message, history);
     const queryText = scopedInput?.about ?? message;
-    const vectors = await embedTextChunksWithGemini([queryText]);
+    const vectors = await embedTextChunksWithGemini([queryText], {
+      apiKey: runtimeApiSettings.geminiApiKey,
+    });
     const queryEmbedding = vectors[0];
     if (!queryEmbedding || queryEmbedding.length === 0) {
       throw new Error("Could not create embedding for query.");
     }
 
     const collection = scopedInput
-      ? await getExistingChromaCollection(getCollectionNameForState(scopedInput.state))
-      : await getOrCreateChromaCollection();
+      ? await getExistingChromaCollection(getCollectionNameForState(scopedInput.state), {
+          apiKey: runtimeApiSettings.chromaApiKey,
+          tenant: runtimeApiSettings.chromaTenant,
+          database: runtimeApiSettings.chromaDatabase,
+        })
+      : await getOrCreateChromaCollection(undefined, {
+          apiKey: runtimeApiSettings.chromaApiKey,
+          tenant: runtimeApiSettings.chromaTenant,
+          database: runtimeApiSettings.chromaDatabase,
+        });
 
     if (scopedInput && !collection) {
       const location = buildLocationLabel(scopedInput);
@@ -479,6 +491,7 @@ export async function POST(req: Request) {
         question: queryText,
         locationLabel: location,
         strongMatch: strongMatchExists,
+        apiKey: runtimeApiSettings.geminiApiKey,
         sources: neighbors.map((neighbor) => ({
           title: neighbor.title,
           summary: neighbor.summary,

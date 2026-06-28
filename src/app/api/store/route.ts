@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { getCollectionNameForState, getOrCreateChromaCollection } from "@/lib/chroma";
 import { embedTextChunksWithGemini } from "@/lib/gemini";
+import { readRuntimeApiSettings } from "@/lib/runtime-api-settings";
 
 const INPUT_FORMAT_HELP =
   "Please enter exactly 3 values separated by commas: state_abbr, municipality_name, query. Example: VA, Norfolk, foundation vent";
@@ -162,6 +163,7 @@ function buildDocumentEntries(result: unknown) {
 
 export async function POST(request: Request) {
   try {
+    const runtimeApiSettings = readRuntimeApiSettings(request.headers);
     const body = (await request.json()) as StoreRequestBody;
     const rawInput = typeof body.input === "string" ? body.input.trim() : "";
     if (!rawInput) {
@@ -199,7 +201,9 @@ export async function POST(request: Request) {
     const limitedEntries = entries.slice(startIndex, endIndex);
     const skippedChunks = entries.length - endIndex;
     const documents = limitedEntries.map((entry) => entry.document as string);
-    const embeddings = await embedTextChunksWithGemini(documents);
+    const embeddings = await embedTextChunksWithGemini(documents, {
+      apiKey: runtimeApiSettings.geminiApiKey,
+    });
     const ids = limitedEntries.map((entry) => entry.id as string);
     const metadatas = limitedEntries.map((entry) => {
       const metadata = entry.metadata as Record<string, unknown>;
@@ -219,7 +223,11 @@ export async function POST(request: Request) {
     });
 
     const collectionName = getCollectionNameForState(parsedInput.stateAbbr);
-    const collection = await getOrCreateChromaCollection(collectionName);
+    const collection = await getOrCreateChromaCollection(collectionName, {
+      apiKey: runtimeApiSettings.chromaApiKey,
+      tenant: runtimeApiSettings.chromaTenant,
+      database: runtimeApiSettings.chromaDatabase,
+    });
     await collection.upsert({
       ids,
       documents,

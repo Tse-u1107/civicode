@@ -34,11 +34,11 @@ type GeminiToolResult = {
   toolCall: PlannedToolCall | null;
 };
 
-export function getGeminiApiKey(): string {
-  const key =
-    process.env.GEMINI_API_KEY ??
-    process.env.GOOGLE_GENERATIVE_AI_API_KEY ??
-    process.env.GOOGLE_API_KEY;
+export function getGeminiApiKey(overrideKey?: string): string {
+  const key = overrideKey
+    ?? process.env.GEMINI_API_KEY
+    ?? process.env.GOOGLE_GENERATIVE_AI_API_KEY
+    ?? process.env.GOOGLE_API_KEY;
 
   if (!key) {
     throw new Error("Missing Gemini API key. Set GEMINI_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY.");
@@ -137,12 +137,15 @@ async function embedWithRetry(ai: GoogleGenAI, chunk: string, chunkIndex: number
   throw new Error(`Gemini embedding failed for chunk ${chunkIndex + 1}`);
 }
 
-export async function embedTextChunksWithGemini(chunks: string[]): Promise<number[][]> {
+export async function embedTextChunksWithGemini(
+  chunks: string[],
+  options?: { apiKey?: string },
+): Promise<number[][]> {
   if (chunks.length === 0) {
     return [];
   }
 
-  const ai = new GoogleGenAI({ apiKey: getGeminiApiKey() });
+  const ai = new GoogleGenAI({ apiKey: getGeminiApiKey(options?.apiKey) });
   const vectors: number[][] = [];
   for (let index = 0; index < chunks.length; index += 1) {
     const vector = await embedWithRetry(ai, chunks[index], index);
@@ -179,8 +182,12 @@ function getFunctionDeclarations() {
   }));
 }
 
-export async function generateGeminiReplyWithTools(message: string, history: ChatTurn[]): Promise<GeminiToolResult> {
-  const ai = new GoogleGenAI({ apiKey: getGeminiApiKey() });
+export async function generateGeminiReplyWithTools(
+  message: string,
+  history: ChatTurn[],
+  options?: { apiKey?: string },
+): Promise<GeminiToolResult> {
+  const ai = new GoogleGenAI({ apiKey: getGeminiApiKey(options?.apiKey) });
   const declarations = getFunctionDeclarations();
   const allowedFunctionNames = declarations.map((item) => item.name).filter(Boolean) as string[];
   const contents: any[] = buildConversationContents(history, message);
@@ -233,8 +240,9 @@ export async function generateGroundedReply(params: {
   locationLabel: string;
   strongMatch: boolean;
   sources: GroundedSource[];
+  apiKey?: string;
 }): Promise<string> {
-  const ai = new GoogleGenAI({ apiKey: getGeminiApiKey() });
+  const ai = new GoogleGenAI({ apiKey: getGeminiApiKey(params.apiKey) });
   const sourcesText = params.sources
     .slice(0, 6)
     .map((source, index) => {

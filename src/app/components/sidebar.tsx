@@ -1,6 +1,6 @@
 "use client";
 
-import { FlaskConical, Home, MessageSquare, type LucideIcon } from "lucide-react";
+import { FlaskConical, Home, MessageSquare, Settings, type LucideIcon } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -12,6 +12,7 @@ import civicodeLogo from "../civicode_thin.png";
 const iconByName: Record<string, LucideIcon> = {
   Home,
   Chat: MessageSquare,
+  Settings,
   Flask: FlaskConical,
 };
 

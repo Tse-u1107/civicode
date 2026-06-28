@@ -1,22 +1,49 @@
 import { CloudClient } from "chromadb";
 
-const CHROMA_API_KEY = process.env.CHROMA_API_KEY ?? "ck-FXJCn7ot9XN8kjEitQyynGmCdwNX4ubg9jfia92Jm7q3";
-const CHROMA_TENANT = process.env.CHROMA_TENANT ?? "0d81d23a-db4e-4fa3-a520-84ecddf1560e";
-const CHROMA_DATABASE = process.env.CHROMA_DATABASE ?? "zoning_policy";
 const DEFAULT_COLLECTION_NAME = process.env.CHROMA_COLLECTION ?? "municode_step5";
 const FALLBACK_STATE_COLLECTION_NAME = "General";
 
-export const chromaClient = new CloudClient({
-  apiKey: CHROMA_API_KEY,
-  tenant: CHROMA_TENANT,
-  database: CHROMA_DATABASE,
-});
+type ChromaConfigOverrides = {
+  apiKey?: string;
+  tenant?: string;
+  database?: string;
+};
 
-export async function getOrCreateChromaCollection(name = DEFAULT_COLLECTION_NAME) {
+function resolveChromaConfig(overrides?: ChromaConfigOverrides) {
+  const apiKey = overrides?.apiKey ?? process.env.CHROMA_API_KEY;
+  const tenant = overrides?.tenant ?? process.env.CHROMA_TENANT;
+  const database = overrides?.database ?? process.env.CHROMA_DATABASE;
+
+  const missing: string[] = [];
+  if (!apiKey) {
+    missing.push("CHROMA_API_KEY");
+  }
+  if (!tenant) {
+    missing.push("CHROMA_TENANT");
+  }
+  if (!database) {
+    missing.push("CHROMA_DATABASE");
+  }
+
+  if (missing.length > 0) {
+    throw new Error(`Missing Chroma settings: ${missing.join(", ")}.`);
+  }
+
+  return { apiKey, tenant, database };
+}
+
+function createChromaClient(overrides?: ChromaConfigOverrides) {
+  const config = resolveChromaConfig(overrides);
+  return new CloudClient(config);
+}
+
+export async function getOrCreateChromaCollection(name = DEFAULT_COLLECTION_NAME, overrides?: ChromaConfigOverrides) {
+  const chromaClient = createChromaClient(overrides);
   return chromaClient.getOrCreateCollection({ name, embeddingFunction: null });
 }
 
-export async function getExistingChromaCollection(name: string) {
+export async function getExistingChromaCollection(name: string, overrides?: ChromaConfigOverrides) {
+  const chromaClient = createChromaClient(overrides);
   const client = chromaClient as unknown as {
     getCollection?: (args: { name: string; embeddingFunction: null }) => Promise<unknown>;
   };

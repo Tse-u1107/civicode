@@ -2,12 +2,17 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import {
+  buildApiSettingsHeaders,
+  getMissingRequiredApiSettings,
+  readClientApiSettings,
+} from "@/lib/client-api-settings";
+import { MissingKeysModal } from "@/app/components/missing-keys-modal";
 import { ChatInput } from "./components/chat-input";
 import { ChatMessageList } from "./components/chat-message-list";
 import { loadSavedChats, saveSavedChats } from "./components/storage";
 import { ChatMessage, SavedChat } from "./components/types";
-import { Suspense } from 'react';
 
 async function wait(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
@@ -28,12 +33,14 @@ function ChatPageContent() {
     {
       id: 1,
       role: "agent",
-      text: "Ask a municipal code question. Optional scoped format: Municipality, State, Query.",
+      text: "What would you like to know today? Optional scoped format: Municipality, State, Query.",
       feedbackEnabled: false,
     },
   ]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
+  const [isMissingKeysModalOpen, setIsMissingKeysModalOpen] = useState(false);
+  const [missingFields, setMissingFields] = useState<string[]>([]);
 
   const canSend = useMemo(() => input.trim().length > 0 && !isTyping, [input, isTyping]);
 
@@ -81,6 +88,14 @@ function ChatPageContent() {
       return;
     }
 
+    const apiSettings = readClientApiSettings();
+    const missing = getMissingRequiredApiSettings(apiSettings);
+    if (missing.length > 0) {
+      setMissingFields(missing);
+      setIsMissingKeysModalOpen(true);
+      return;
+    }
+
     const userMessage: ChatMessage = { id: Date.now(), role: "user", text };
     const history = messages.map((message) => ({ role: message.role, text: message.text }));
 
@@ -92,7 +107,10 @@ function ChatPageContent() {
       const [response] = await Promise.all([
         fetch("/api/chat", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...buildApiSettingsHeaders(apiSettings),
+          },
           body: JSON.stringify({
             message: text,
             history,
@@ -177,6 +195,12 @@ function ChatPageContent() {
         <ChatMessageList messages={messages} isTyping={isTyping} />
         <ChatInput value={input} onChange={setInput} onSubmit={handleSubmit} disabled={!canSend} />
       </main>
+      <MissingKeysModal
+        isOpen={isMissingKeysModalOpen}
+        actionLabel="chat"
+        missingFields={missingFields}
+        onClose={() => setIsMissingKeysModalOpen(false)}
+      />
     </div>
   );
 }
