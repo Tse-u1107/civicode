@@ -21,6 +21,11 @@ export const appRoutes: AppRoute[] = [
     link: "/retrieve",
   },
   {
+    name: "Flow",
+    icon: "Flask",
+    link: "/flow",
+  },
+  {
     name: "Saved",
     icon: "Flask",
     link: "/chat/saved",

@@ -7,12 +7,21 @@ import { ChatInput } from "./components/chat-input";
 import { ChatMessageList } from "./components/chat-message-list";
 import { loadSavedChats, saveSavedChats } from "./components/storage";
 import { ChatMessage, SavedChat } from "./components/types";
+import { Suspense } from 'react';
 
 async function wait(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export default function ChatPage() {
+  return (
+    <Suspense fallback={null}>
+      <ChatPageContent />
+    </Suspense>
+  );
+}
+
+function ChatPageContent() {
   const searchParams = useSearchParams();
   const savedChatId = searchParams.get("savedChatId");
   const [messages, setMessages] = useState<ChatMessage[]>([

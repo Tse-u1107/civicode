@@ -125,9 +125,9 @@ export default function HomePage() {
           Total score: {totalScore}
         </p>
 
-        <div className="overflow-x-auto rounded-md border border-zinc-200 p-3 dark:border-zinc-800">
+        <div className="w-full rounded-md border border-zinc-200 p-3 dark:border-zinc-800">
           <div
-            className="grid w-max grid-cols-[repeat(14,minmax(0,1fr))] gap-1"
+            className="grid w-full grid-cols-[repeat(14,minmax(0,1fr))] gap-2"
             role="img"
             aria-label="Blocky United States grid progress map"
           >
@@ -136,7 +136,7 @@ export default function HomePage() {
               return (
                 <div
                   key={tile.abbr}
-                  className="flex h-15 w-15 cursor-pointer items-center justify-center rounded-sm border border-zinc-300 text-[10px] font-semibold text-zinc-900 transition-transform hover:scale-105 dark:border-zinc-700 dark:text-zinc-100"
+                  className="flex aspect-square w-full cursor-pointer items-center justify-center rounded-sm border border-zinc-300 text-xs font-bold text-zinc-900 transition-transform hover:scale-105 dark:border-zinc-700 dark:text-zinc-100 sm:text-sm"
                   style={{
                     gridRowStart: tile.row + 1,
                     gridColumnStart: tile.col + 1,
